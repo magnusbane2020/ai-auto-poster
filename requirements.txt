@@ -1,0 +1,12 @@
+# AI Auto-Poster Dependencies
+# Core
+python-dotenv==1.0.0
+openai==1.12.0
+httpx==0.26.0
+apscheduler==3.10.4
+
+# Data & Storage
+feedparser==6.0.10
+
+# Utilities
+tenacity==8.2.3
