@@ -1,0 +1,38 @@
+# === PYTHON BASICS ===
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+*.db
+*.DS_Store
+*.vscode/
+*.idea/
+
+# === ENV & CONFIG ===
+.env
+.env.local
+.env.*
+!.env.example
+
+# === MEDIA / GENERATED FILES ===
+media/
+uploads/
+tmp/
+cache/
+__cache__/
+
+# === VIRTUAL ENVIRONMENT ===
+.venv/
+env/
+venv/
+
+# === BACKUPS / SYSTEM FILES ===
+*.bak
+*.swp
+Thumbs.db
+desktop.ini
+
+# === MISC ===
+logs/
