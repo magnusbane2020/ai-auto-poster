@@ -89,100 +89,48 @@ def post_facebook(message: str, image_path: Optional[str] = None) -> str:
 # ---------- LinkedIn ----------
 def post_linkedin(message: str, image_path: Optional[str] = None) -> str:
     """
-    Post to LinkedIn using UGC API (works for both personal and org accounts).
+    Post to LinkedIn using intelligent hybrid strategy.
+    Tries Official API first (if configured), falls back to Selenium.
+    
     Args:
         message: Post text content
         image_path: Optional path to image file
     Returns:
-        Empty string (LinkedIn API v2 doesn't return immediate permalink)
+        Result message (timestamp or post ID)
+    
+    Note:
+        Uses linkedin_poster.py which automatically selects best method:
+        1. Official API (if configured)
+        2. Selenium automation (always works)
+        3. Error notification if both fail
     """
-    token = CFG["LINKEDIN_ACCESS_TOKEN"]
-    owner = CFG["LINKEDIN_ORG_URN"] or CFG["LINKEDIN_PERSON_URN"]
-    
-    if not token:
-        raise ValueError("LINKEDIN_ACCESS_TOKEN required")
-    if not owner:
-        raise ValueError("Set LINKEDIN_PERSON_URN or LINKEDIN_ORG_URN")
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "X-Restli-Protocol-Version": "2.0.0",
-        "Content-Type": "application/json"
-    }
-
-    def _post():
-        with httpx.Client(timeout=45) as client:
-            if image_path:
-                # Step 1: Register upload
-                init_resp = client.post(
-                    "https://api.linkedin.com/v2/assets?action=registerUpload",
-                    headers=headers,
-                    json={
-                        "registerUploadRequest": {
-                            "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
-                            "owner": owner,
-                            "serviceRelationships": [
-                                {"relationshipType": "OWNER", "identifier": "urn:li:userGeneratedContent"}
-                            ]
-                        }
-                    }
-                )
-                init_resp.raise_for_status()
-                init_data = init_resp.json()
-                
-                upload_url = init_data["value"]["uploadMechanism"]["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]["uploadUrl"]
-                asset = init_data["value"]["asset"]
-                
-                # Step 2: Upload binary image
-                with open(image_path, "rb") as f:
-                    upload_resp = client.put(
-                        upload_url,
-                        headers={"Authorization": f"Bearer {token}"},
-                        content=f.read()
-                    )
-                    upload_resp.raise_for_status()
-                
-                # Step 3: Create post with image
-                body = {
-                    "author": owner,
-                    "lifecycleState": "PUBLISHED",
-                    "specificContent": {
-                        "com.linkedin.ugc.ShareContent": {
-                            "shareCommentary": {"text": message},
-                            "shareMediaCategory": "IMAGE",
-                            "media": [{"status": "READY", "media": asset}]
-                        }
-                    },
-                    "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"}
-                }
-            else:
-                # Text-only post
-                body = {
-                    "author": owner,
-                    "lifecycleState": "PUBLISHED",
-                    "specificContent": {
-                        "com.linkedin.ugc.ShareContent": {
-                            "shareCommentary": {"text": message},
-                            "shareMediaCategory": "NONE"
-                        }
-                    },
-                    "visibility": {"com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC"}
-                }
-<<<<<<< Current (Your changes)
-              },
-              "visibility": {"com.linkedin.ugc.MemberNetworkVisibility":"CONNECTIONS"}
-            }
-        r = x.post("https://api.linkedin.com/v2/ugcPosts", headers=headers, json=body)
-        r.raise_for_status()
-        return ""  # LinkedIn doesn’t immediately return permalink; optional follow-up fetch if needed
-=======
+    try:
+        from linkedin_poster import post_to_linkedin as unified_post
+        
+        log_event("social_poster", "info", "Using LinkedIn unified posting strategy", 
+                 {"has_image": bool(image_path)})
+        
+        success, result = unified_post(message, image_path)
+        
+        if success:
+            log_event("social_poster", "info", "LinkedIn post published", 
+                     {"result": result, "has_image": bool(image_path)})
+            return result
+        else:
+            log_event("social_poster", "error", f"LinkedIn posting failed: {result}")
+            raise RuntimeError(f"LinkedIn posting failed: {result}")
             
-            # Publish post
-            post_resp = client.post("https://api.linkedin.com/v2/ugcPosts", headers=headers, json=body)
-            post_resp.raise_for_status()
-            return ""  # LinkedIn v2 API doesn't return permalink immediately
-    
-    result = _retry_request(_post)
-    log_event("social_poster", "info", "LinkedIn post published", {"has_image": bool(image_path)})
-    return result
->>>>>>> Incoming (Background Agent changes)
+    except ImportError:
+        # Fallback to old method if linkedin_poster not available
+        log_event("social_poster", "warning", "linkedin_poster not available, using legacy method")
+        
+        # Try Selenium directly
+        try:
+            from linkedin_selenium import post_to_linkedin as selenium_post
+            result = selenium_post(message, image_path, headless=True)
+            if result:
+                return result
+        except:
+            pass
+        
+        raise RuntimeError("No LinkedIn posting method available")

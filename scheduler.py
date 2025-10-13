@@ -57,21 +57,29 @@ from trends import discover_topics, normalize_topic
 from ai_agent import bmad_supervisor, generate_text, generate_image
 from guardrails import enforce_platform_rules, validate_post_content
 from social_poster import post_facebook, post_linkedin
+from csv_logger import log_post_to_csv, export_posts_to_csv
+from personas import select_persona
 
 def plan_daily():
     """
-    Daily content planning job.
-    1. Discovers trending topics
-    2. BMAD Supervisor selects best strategy
-    3. Generates text variants
+    Daily content planning job with persona-based content generation.
+    1. Selects random persona (weighted)
+    2. Discovers trending topics from persona-specific sources
+    3. Generates text using persona prompt
     4. Generates image
     5. Schedules posts for both platforms
     """
     log_event("scheduler", "info", "Starting daily content planning")
     
     try:
-        # Discover topics
-        topics = discover_topics(max_topics=10)
+        # Step 1: Select persona (weighted random)
+        persona = select_persona()
+        log_event("scheduler", "info", 
+                 f"Using persona: {persona.name} (weight={persona.weight})",
+                 {"persona_id": persona.id, "tone": persona.tone})
+        
+        # Step 2: Discover topics from persona-specific sources
+        topics = discover_topics(max_topics=10, sources=persona.sources)
         if not topics:
             log_event("scheduler", "error", "No topics discovered")
             return
@@ -79,16 +87,14 @@ def plan_daily():
         # Get brand voice from config
         brand = CFG["BRAND_BULLETS"]
         
-        # BMAD Supervisor decision
-        plan = bmad_supervisor(topics, brand)
-        log_event("scheduler", "info", f"Supervisor selected: {plan.get('title', 'N/A')[:50]}")
-        
-        # Generate text variants
+        # Step 3: Generate text variants using persona prompt
         variants = generate_text(
             topic=topics[0],
             brand_bullets=brand,
-            style=plan.get("body_style", "professional"),
-            variants=3
+            style=persona.style,
+            variants=3,
+            persona_prompt=persona.prompt,
+            persona_id=persona.id
         )
         
         # Select best variant (first one is typically best due to temperature)
@@ -102,10 +108,27 @@ def plan_daily():
         if errors:
             log_event("scheduler", "warning", f"Content validation issues: {', '.join(errors)}")
         
-        # Generate image
+        # Generate image (use persona tone for image prompt)
         os.makedirs(CFG["MEDIA_DIR"], exist_ok=True)
         img_path = os.path.join(CFG["MEDIA_DIR"], f"post_{int(time.time())}.png")
-        raw = generate_image(plan.get("image_prompt", "Abstract professional design"), save_path=img_path)
+        
+        # Create image prompt based on persona and topic
+        if persona.id == "fun_facts_ai":
+            img_prompt = f"Playful, colorful illustration about {topics[0][:100]}, fun and engaging style"
+        elif persona.id == "ai_trends_keywords":
+            img_prompt = f"Modern, data-driven visualization of {topics[0][:100]}, sleek tech aesthetic"
+        else:
+            img_prompt = f"Professional, enterprise-grade visualization of {topics[0][:100]}, business context"
+        
+        # Generate image with text detection (may return None if all retries fail)
+        raw = generate_image(img_prompt, save_path=img_path)
+        
+        # Fallback to text-only if image generation failed
+        if raw is None:
+            log_event("scheduler", "warning", 
+                     "Image generation failed after retries, using text-only post",
+                     {"topic": topics[0][:50]})
+            img_path = None  # Will create text-only post
         
         # Apply platform-specific guardrails
         lk_body = enforce_platform_rules(best["body"], "linkedin")
@@ -117,12 +140,15 @@ def plan_daily():
                 db.execute(
                     """INSERT INTO posts(platform, status, title, body, image_path, scheduled_at, topic_key)
                        VALUES(?, ?, ?, ?, ?, datetime('now', '+1 hour'), ?)""",
-                    (platform, "scheduled", best.get("title", ""), body, img_path, normalize_topic(topics[0]))
+                    (platform, "scheduled", best.get("title", ""), body, img_path, 
+                     f"{persona.id}:{normalize_topic(topics[0])}")
                 )
         
         log_event("scheduler", "info", "Daily content planning completed", {
             "topics_count": len(topics),
-            "title": best.get("title", "")[:50]
+            "title": best.get("title", "")[:50],
+            "persona": persona.name,
+            "persona_id": persona.id
         })
         
     except Exception as e:
@@ -139,7 +165,7 @@ def tick():
         cur = db.execute(
             """SELECT * FROM posts
                WHERE status IN ('scheduled', 'error') 
-               AND scheduled_at <= datetime('now')
+               AND scheduled_at <= datetime('now', 'localtime')
                AND retry_count < 3
                ORDER BY scheduled_at ASC LIMIT 5"""
         )
@@ -170,6 +196,21 @@ def tick():
                        WHERE id=?""",
                     (permalink, post_id)
                 )
+                
+                # Log to CSV
+                log_post_to_csv({
+                    "id": post_id,
+                    "platform": platform,
+                    "status": "posted",
+                    "title": post["title"],
+                    "scheduled_at": post["scheduled_at"],
+                    "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    "permalink": permalink,
+                    "topic_key": post["topic_key"],
+                    "cost_usd": post["cost_usd"],
+                    "error_message": None,
+                    "created_at": post["created_at"]
+                })
                 
                 log_event("scheduler", "info", f"{platform.capitalize()} post published", {
                     "post_id": post_id,
@@ -209,14 +250,6 @@ def run_scheduler():
     print(f"🌍 Timezone: {CFG['TZ']}")
     
     sch = BlockingScheduler(timezone=CFG["TZ"])
-<<<<<<< Current (Your changes)
-    # plan content daily at 08:00
-    sch.add_job(plan_daily, "cron", hour=8, minute=0)
-    # post when due every 2 minutes
-    sch.add_job(tick, "interval", minutes=2)
-    print("Scheduler running…")
-    sch.start()
-=======
     
     # Daily content planning at 08:00
     sch.add_job(plan_daily, "cron", hour=8, minute=0, id="daily_planning")
@@ -238,4 +271,3 @@ def run_scheduler():
 
 if __name__ == "__main__":
     run_scheduler()
->>>>>>> Incoming (Background Agent changes)

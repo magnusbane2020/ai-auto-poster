@@ -1,8 +1,4 @@
-THIS SHOULD BE A LINTER ERROR"""
-guardrails.py - Content validation and platform-specific constraints.
-Enforces character limits, link policies, and basic quality checks.
-Prevents posts from being rejected by social platforms.
-"""
+
 import re
 
 # Platform limits (conservative to avoid truncation)
@@ -20,20 +16,13 @@ def enforce_platform_rules(text: str, platform: str) -> str:
     Returns:
         Cleaned text within platform limits
     """
-    limits = PLATFORM_LIMITS.get(platform, {"max_chars": 2000, "max_links": 1})
+    limits = PLATFORM_LIMITS.get(platform, {"max_chars": 2000, "recommended": 1200, "max_links": 1})
     t = text.strip()
     
     # Enforce recommended length
     max_len = limits["recommended"]
     if len(t) > max_len:
         t = t[:max_len-3] + "..."
-<<<<<<< Current (Your changes)
-    # example link policy: max 1 link
-    parts = t.split("http")
-    if len(parts) > 2:
-        t = "http".join(parts[:2])  # keep first link only
-    return t
-=======
     
     # Enforce link limit (keep first N links)
     max_links = limits["max_links"]
@@ -60,4 +49,3 @@ def validate_post_content(title: str, body: str) -> list[str]:
         errors.append("Body too long (max 5000 chars)")
     # TODO: Add profanity filter, spam detection, etc.
     return errors
->>>>>>> Incoming (Background Agent changes)

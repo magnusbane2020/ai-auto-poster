@@ -2,9 +2,13 @@
 db.py - SQLite database layer with context manager and migrations.
 Stores posts, topics, AI cache, cost tracking, and logs.
 Auto-migrates on import. Idempotent schema creation.
+Enhanced with bulletproof WAL mode, retry logic, cleanup, and monitoring.
 """
 import sqlite3
 import json
+import time
+import os
+import atexit
 from contextlib import contextmanager
 from datetime import datetime
 from dotenv import load_dotenv
@@ -14,11 +18,76 @@ load_dotenv()
 
 from config import CFG
 
+LOCK_FILES = ["posts.db-wal", "posts.db-shm"]
+
+def _cleanup_locks():
+    """Remove leftover SQLite WAL/SHM locks if they exist."""
+    for f in LOCK_FILES:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+                print(f"🧹 [{datetime.now().strftime('%H:%M:%S')}] Removed stale lock file: {f}")
+            except Exception as e:
+                # File might be in use - that's OK, continue
+                pass
+
+def get_connection(retries=5, delay=1):
+    """
+    Create a fault-tolerant SQLite connection with:
+    - WAL mode (safe concurrent writes)
+    - Retry logic if locked
+    - Auto-cleanup for stale files
+    - Enhanced busy timeout and synchronization
+    
+    Args:
+        retries: Number of retry attempts
+        delay: Delay between retries in seconds
+    Returns:
+        SQLite connection with WAL mode enabled
+    """
+    db_path = CFG["DB_PATH"]
+    
+    # Clean up any stale lock files first
+    _cleanup_locks()
+    
+    # Attempt multiple retries before giving up
+    for attempt in range(retries):
+        try:
+            conn = sqlite3.connect(db_path, timeout=10, isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            
+            # Enable WAL mode for concurrent-safe operations
+            conn.execute("PRAGMA journal_mode=WAL;")
+            
+            # Enhanced busy timeout (5 seconds)
+            conn.execute("PRAGMA busy_timeout = 5000;")
+            
+            # Optimize for reliability over speed
+            conn.execute("PRAGMA synchronous = NORMAL;")
+            
+            # Better cache for read performance
+            conn.execute("PRAGMA cache_size = -64000;")  # 64MB cache
+            
+            print(f"⚙️ [{datetime.now().strftime('%H:%M:%S')}] SQLite connection active (attempt {attempt+1})")
+            
+            return conn
+        except sqlite3.OperationalError as e:
+            if "database is locked" in str(e).lower():
+                print(f"⏳ Database locked, retrying ({attempt + 1}/{retries})...")
+                time.sleep(delay)
+            else:
+                raise
+    
+    raise Exception("❌ Could not access database after multiple retries.")
+
 @contextmanager
 def get_db():
-    """Context manager for SQLite connection with auto-commit."""
-    con = sqlite3.connect(CFG["DB_PATH"])
-    con.row_factory = sqlite3.Row
+    """
+    Context manager for SQLite connection with auto-commit.
+    Uses robust connection factory with retry logic and crash recovery.
+    """
+    con = get_connection()
+    
     try:
         yield con
     finally:
@@ -88,8 +157,6 @@ def migrate():
         );
         CREATE INDEX IF NOT EXISTS idx_costs_date ON costs(date);
         """)
-<<<<<<< Current (Your changes)
-=======
 
 def log_event(scope: str, level: str, message: str, meta: dict = None):
     """Insert structured log entry."""
@@ -108,6 +175,66 @@ def record_cost(scope: str, model: str, tokens: int, cost_usd: float, meta: dict
             (date, scope, model, tokens, cost_usd, json.dumps(meta or {}))
         )
 
+def monitor_db():
+    """Diagnostic function to print DB status and open connections."""
+    print("🔍 Database monitor active...")
+    db_path = CFG["DB_PATH"]
+    
+    # Check if database file exists
+    if os.path.exists(db_path):
+        size_mb = os.path.getsize(db_path) / (1024 * 1024)
+        print(f"  Database: {db_path} ({size_mb:.2f} MB)")
+    else:
+        print(f"  Database: {db_path} (NOT FOUND)")
+    
+    # Check lock files
+    for f in LOCK_FILES:
+        exists = os.path.exists(f)
+        status = "EXISTS" if exists else "ok"
+        if exists:
+            size_kb = os.path.getsize(f) / 1024
+            print(f"  {f}: {status} ({size_kb:.2f} KB)")
+        else:
+            print(f"  {f}: {status}")
+    
+    # Try to connect and check WAL mode
+    try:
+        conn = get_connection()
+        cursor = conn.execute("PRAGMA journal_mode;")
+        mode = cursor.fetchone()[0]
+        print(f"  Journal mode: {mode}")
+        
+        # Check table counts
+        cursor = conn.execute("SELECT COUNT(*) FROM posts")
+        posts_count = cursor.fetchone()[0]
+        print(f"  Posts: {posts_count}")
+        
+        cursor = conn.execute("SELECT COUNT(*) FROM topics")
+        topics_count = cursor.fetchone()[0]
+        print(f"  Topics: {topics_count}")
+        
+        cursor = conn.execute("SELECT COUNT(*) FROM ai_cache")
+        cache_count = cursor.fetchone()[0]
+        print(f"  AI Cache: {cache_count}")
+        
+        conn.close()
+        print("✅ Database healthy")
+    except Exception as e:
+        print(f"❌ Database error: {e}")
+
+def checkpoint_wal():
+    """Force WAL checkpoint to merge changes into main DB file."""
+    try:
+        conn = get_connection()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        conn.close()
+        print(f"✅ [{datetime.now().strftime('%H:%M:%S')}] WAL checkpoint completed")
+    except Exception as e:
+        print(f"⚠️ WAL checkpoint failed: {e}")
+
+# Register cleanup on exit
+atexit.register(_cleanup_locks)
+atexit.register(checkpoint_wal)
+
 # Auto-migrate on import
->>>>>>> Incoming (Background Agent changes)
 migrate()

@@ -42,11 +42,6 @@ def set_cached(role: str, payload: dict, output: str, meta: dict):
     """
     key = _h(payload)
     with get_db() as db:
-<<<<<<< Current (Your changes)
-        db.execute("""INSERT INTO ai_cache(cache_key, role, input_hash, output_text, metadata_json, created_at)
-                      VALUES(?,?,?,?,?,datetime('now'))""",
-                   (key[:16], role, key, output, json.dumps(meta)))
-=======
         db.execute(
             """INSERT INTO ai_cache(cache_key, role, input_hash, output_text, metadata_json)
                VALUES(?,?,?,?,?)""",
@@ -60,4 +55,3 @@ def clear_old_cache(days: int = 30):
             "DELETE FROM ai_cache WHERE created_at < datetime('now', ?)",
             (f"-{days} days",)
         )
->>>>>>> Incoming (Background Agent changes)

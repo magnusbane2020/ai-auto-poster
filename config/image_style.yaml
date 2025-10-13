@@ -1,0 +1,7 @@
+style:
+  tone: "professional, minimalist, high-tech"
+  avoid: ["text", "labels", "letters", "handwriting", "captions"]
+  palette: ["#0A192F", "#172A45", "#64FFDA", "#E6F1FF"]
+  keywords: ["futuristic design", "digital intelligence", "data visualization", "innovation network"]
+  retries: 3
+
